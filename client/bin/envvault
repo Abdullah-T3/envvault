@@ -1,0 +1,120 @@
+#!/usr/bin/env bash
+# envvault client: push/pull .env files to/from your envvault server.
+set -u
+
+CONF="${ENVVAULT_CONFIG:-$HOME/.envvault/config}"
+# shellcheck disable=SC1090
+[ -f "$CONF" ] && . "$CONF"
+URL="${ENVVAULT_URL:-}"
+TOKEN="${ENVVAULT_TOKEN:-}"
+TIMEOUT="${ENVVAULT_TIMEOUT:-8}"
+
+log()  { echo "envvault: $*" >&2; }
+warn() { echo "envvault: warning: $*" >&2; }
+
+sha256() {
+  if command -v sha256sum >/dev/null 2>&1; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi
+}
+b64url() { printf '%s' "$1" | base64 | tr -d '\n=' | tr '+/' '-_'; }
+
+project_id() {
+  local u
+  u=$(git remote get-url origin 2>/dev/null) || return 1
+  printf '%s' "$u" | tr 'A-Z' 'a-z' \
+    | sed -E 's#^[a-z+]+://##; s#^[^@/]+@##; s#:#/#; s#\.git$##; s#/+$##' | sha256
+}
+
+require_setup() {
+  if [ -z "$URL" ] || [ -z "$TOKEN" ]; then
+    warn "not configured (run client/install.sh); skipping"
+    exit 0
+  fi
+}
+
+env_files() {
+  git ls-files -c -o -i --exclude-standard 2>/dev/null
+  git ls-files -c 2>/dev/null
+  git ls-files -o --exclude-standard 2>/dev/null
+}
+
+filter_env() {
+  grep -E '(^|/)\.env[^/]*$' | grep -Ev '\.(example|sample|template|dist)$' \
+    | grep -v 'node_modules/' | sort -u
+}
+
+api() { # api METHOD PATH [curl args...]
+  local method="$1" p="$2"; shift 2
+  curl -sS --max-time "$TIMEOUT" -X "$method" -H "Authorization: Bearer $TOKEN" "$@" "$URL$p"
+}
+
+cmd_push() {
+  require_setup
+  local root pid f code n_new=0 n_same=0 n_fail=0
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || { warn "not a git repo"; return 0; }
+  cd "$root" || return 0
+  pid=$(project_id) || { warn "no 'origin' remote; skipping"; return 0; }
+
+  local tracked untracked
+  tracked=$(git ls-files -c | filter_env)
+  untracked=$(git ls-files -o --exclude-standard | filter_env)
+  [ -n "$tracked" ] && warn "env file(s) are tracked by git (they will be pushed to GitHub!): $(echo "$tracked" | tr '\n' ' ')"
+  [ -n "$untracked" ] && warn "env file(s) not in .gitignore: $(echo "$untracked" | tr '\n' ' ')"
+
+  while IFS= read -r f; do
+    [ -f "$f" ] || continue
+    code=$(api PUT "/v1/projects/$pid/files/$(b64url "$f")" -o /dev/null -w '%{http_code}' --data-binary @"$f" 2>/dev/null) || code=000
+    case "$code" in
+      201) n_new=$((n_new + 1)) ;;
+      200) n_same=$((n_same + 1)) ;;
+      *)   n_fail=$((n_fail + 1)); warn "upload failed for $f (HTTP $code)" ;;
+    esac
+  done < <(env_files | filter_env)
+
+  if [ $((n_new + n_same + n_fail)) -gt 0 ]; then
+    log "$n_new updated, $n_same unchanged, $n_fail failed"
+  fi
+  return 0
+}
+
+cmd_pull() {
+  require_setup
+  local force=0 root pid list f dest tmp n_new=0 n_skip=0
+  [ "${1:-}" = "--force" ] && force=1
+  root=$(git rev-parse --show-toplevel 2>/dev/null) || { warn "not a git repo"; return 0; }
+  cd "$root" || return 0
+  pid=$(project_id) || { warn "no 'origin' remote; skipping"; return 0; }
+
+  list=$(api GET "/v1/projects/$pid/files" --fail 2>/dev/null) || { warn "could not reach server; skipping"; return 0; }
+  [ -z "$list" ] && return 0
+
+  while IFS= read -r f; do
+    case "$f" in ''|/*|*..*) continue ;; esac
+    dest="$root/$f"
+    tmp="$dest.envvault.tmp"
+    mkdir -p "$(dirname "$dest")"
+    api GET "/v1/projects/$pid/files/$(b64url "$f")" --fail -o "$tmp" 2>/dev/null || { rm -f "$tmp"; warn "download failed for $f"; continue; }
+    if [ -e "$dest" ] && [ "$force" = 0 ]; then
+      if cmp -s "$tmp" "$dest"; then :; else warn "$f exists and differs; kept local (use 'envvault pull --force')"; n_skip=$((n_skip + 1)); fi
+      rm -f "$tmp"
+    else
+      chmod 600 "$tmp"; mv "$tmp" "$dest"; n_new=$((n_new + 1))
+    fi
+  done <<< "$list"
+
+  [ "$n_new" -gt 0 ] && log "restored $n_new env file(s)"
+  return 0
+}
+
+cmd_list() {
+  require_setup
+  local pid
+  pid=$(project_id) || { warn "no 'origin' remote"; return 1; }
+  api GET "/v1/projects/$pid/files" --fail
+}
+
+case "${1:-}" in
+  push) cmd_push ;;
+  pull) shift; cmd_pull "${1:-}" ;;
+  list) cmd_list ;;
+  *) echo "usage: envvault {push|pull [--force]|list}" >&2; exit 2 ;;
+esac

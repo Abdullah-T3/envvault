@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# On clone (previous HEAD is all zeros) restore missing .env files, then chain to the repo's own hook.
+if [ "${1:-}" = "0000000000000000000000000000000000000000" ]; then
+  "${ENVVAULT_HOME:-$HOME/.envvault}/bin/envvault" pull || true
+fi
+local_hook=$(printf '%s/hooks/post-checkout' "$(git rev-parse --git-common-dir)" 2>/dev/null)
+if [ -n "$local_hook" ] && [ -x "$local_hook" ]; then
+  exec "$local_hook" "$@"
+fi
+exit 0

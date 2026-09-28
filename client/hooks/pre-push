@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Uploads .env files to envvault, then chains to the repo's own pre-push hook.
+stdin=$(cat)
+"${ENVVAULT_HOME:-$HOME/.envvault}/bin/envvault" push || true
+local_hook=$(printf '%s/hooks/pre-push' "$(git rev-parse --git-common-dir)" 2>/dev/null)
+if [ -n "$local_hook" ] && [ -x "$local_hook" ]; then
+  printf '%s\n' "$stdin" | "$local_hook" "$@"
+  exit $?
+fi
+exit 0

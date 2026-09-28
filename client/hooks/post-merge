@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# After git pull/merge restore any missing .env files, then chain to the repo's own hook.
+"${ENVVAULT_HOME:-$HOME/.envvault}/bin/envvault" pull || true
+local_hook=$(printf '%s/hooks/post-merge' "$(git rev-parse --git-common-dir)" 2>/dev/null)
+if [ -n "$local_hook" ] && [ -x "$local_hook" ]; then
+  exec "$local_hook" "$@"
+fi
+exit 0
