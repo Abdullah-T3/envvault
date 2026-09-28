@@ -19,6 +19,8 @@ env.example.com {
 }
 ```
 
+Dokploy: create a Compose service from this repo with compose path `./server/docker-compose.dokploy.yml`, set `ENVVAULT_TOKEN` and `ENVVAULT_MASTER_KEY` in its Environment tab, add a domain (service `envvault`, port 8787, Let's Encrypt), then redeploy.
+
 Back up the `envvault-data` volume **and** `ENVVAULT_MASTER_KEY` (files can't be decrypted without it). Runs without Docker too: `node server/src/index.js` with the same env vars (Node 20+).
 
 ## Client (each machine)
