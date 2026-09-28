@@ -1,0 +1,21 @@
+services:
+  envvault:
+    build: .
+    restart: unless-stopped
+    environment:
+      ENVVAULT_TOKEN: ${ENVVAULT_TOKEN}
+      ENVVAULT_MASTER_KEY: ${ENVVAULT_MASTER_KEY}
+      KEEP_VERSIONS: ${KEEP_VERSIONS:-20}
+    expose:
+      - "8787"
+    volumes:
+      - envvault-data:/data
+    networks:
+      - dokploy-network
+
+volumes:
+  envvault-data:
+
+networks:
+  dokploy-network:
+    external: true
